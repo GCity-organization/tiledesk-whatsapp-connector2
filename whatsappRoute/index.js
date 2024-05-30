@@ -583,7 +583,7 @@ router.post("/tiledesk/broadcast", async (req, res) => {
         tiledeskChannelMessage,
         whatsapp_receiver
       );
-      winston.info("customTiledeskJsonMessage: ", customTiledeskJsonMessage);
+      winston.verbose("customTiledeskJsonMessage: ", customTiledeskJsonMessage);
 
       let whatsappJsonMessage = await tlr.toWhatsapp(
         customTiledeskJsonMessage,
@@ -724,7 +724,7 @@ router.post("/tiledesk", async (req, res) => {
   var tiledeskChannelMessage = req.body.payload;
   winston.debug("(wab) tiledeskChannelMessage: ", tiledeskChannelMessage);
   var project_id = req.body.payload.id_project;
-
+  
   // get settings from mongo
   let CONTENT_KEY = "whatsapp-" + project_id;
   let settings = await db.get(CONTENT_KEY);
@@ -929,21 +929,86 @@ router.post("/tiledesk", async (req, res) => {
   
 });
 
+router.post("/tiledesk/direct", async (req, res) => {
+  winston.verbose("(wab) Message received from Tiledesk");
+
+  var tiledeskChannelMessage = req.body.payload;
+  winston.debug("(wab) tiledeskChannelMessage: ", tiledeskChannelMessage);
+  var project_id = req.body.payload.id_project;
+  var phone_number_id = req.body.payload.recipient_id;
+  
+  // get settings from mongo
+  let CONTENT_KEY = "whatsapp-" + project_id;
+  let settings = await db.get(CONTENT_KEY);
+
+  var text = req.body.payload.text;
+
+  var sender_id = req.body.payload.sender;
+
+  if (sender_id.indexOf("wab") > -1) {
+    winston.verbose("(wab) Skip same sender");
+    return res.sendStatus(200);
+  }
+
+
+  if (!phone_number_id) {
+    return res.status(400).send({ success: false, message: "Phone number id undefined" });
+  }
+
+
+  winston.debug("(wab) text: " + text);
+  winston.debug("(wab) tiledesk sender_id: " + sender_id);
+  winston.debug("(wab) whatsapp_receiver: " + whatsapp_receiver);
+  winston.debug("(wab) phone_number_id: " + phone_number_id);
+
+
+  const tlr = new TiledeskWhatsappTranslator();
+
+  let whatsappJsonMessage = await tlr.toWhatsapp(
+    tiledeskChannelMessage,
+    whatsapp_receiver
+  );
+  winston.verbose("(wab) whatsappJsonMessage", whatsappJsonMessage);
+
+  if (whatsappJsonMessage) {
+    const twClient = new TiledeskWhatsapp({
+      token: settings.wab_token,
+      GRAPH_URL: GRAPH_URL,
+      API_URL: API_URL,
+      BASE_FILE_URL: BASE_FILE_URL,
+    });
+
+    twClient
+      .sendMessage(phone_number_id, whatsappJsonMessage)
+      .then((response) => {
+        winston.verbose("(wab) Message sent to WhatsApp! " + response.status + " " + response.statusText);
+        return res.sendStatus(200);
+      })
+      .catch((err) => {
+        winston.error("(wab) error send message: ", err);
+        return res.status(400).send({ success: false, error: "Template not existing" });
+      });
+  } else {
+    winston.error("(wab) Whatsapp Json Message is undefined!");
+    return res.status(400).send({ success: false, error: "An error occurred during message translation" });
+  }
+});
+
 // Endpoint for Whatsapp Business
 // Accepts POST requests at /webhook endpoint
 router.post("/webhook/:project_id", async (req, res) => {
   // Parse the request body from the POST
   let project_id = req.params.project_id;
   winston.verbose("(wab) Message received from WhatsApp");
-
+  winston.info(req.body);
   // Check the Incoming webhook message
   // info on WhatsApp text message payload: https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples#text-messages
   if (req.body.object) {
-
+    
     let CONTENT_KEY = "whatsapp-" + project_id;
     let settings = await db.get(CONTENT_KEY);
     winston.debug("(wab) settings: ", settings);
-
+    
     const tdClient = new TiledeskClient({
       projectId: project_id,
       token: settings.token,
@@ -964,6 +1029,11 @@ router.post("/webhook/:project_id", async (req, res) => {
     ) {
       if (req.body.entry[0].changes[0].value.messages[0].type == "system") {
         winston.verbose("(wab) Skip system message");
+        return res.sendStatus(200);
+      }
+      
+      if (req.body.entry[0].id !== settings.business_account_id) {
+        winston.verbose("(wab) Skip message with waba that not belong to Tiledesk project id");
         return res.sendStatus(200);
       }
 
@@ -1027,7 +1097,7 @@ router.post("/webhook/:project_id", async (req, res) => {
             lastname: " ",
           },
         };
-
+        
         let tiledeskJsonMessage;
 
         /*
