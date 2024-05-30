@@ -250,7 +250,7 @@ router.get("/configure", async (req, res) => {
           subscription_id: settings.subscriptionId,
           department_id: settings.department_id,
           departments: departments,
-          brand_name: BRAND_NAME
+          brand_name: BRAND_NAME,
         };
         var html = template(replacements);
         res.send(html);
@@ -269,7 +269,7 @@ router.get("/configure", async (req, res) => {
           proxy_url: proxy_url,
           departments: departments,
           popup_view: popup_view,
-          brand_name: BRAND_NAME
+          brand_name: BRAND_NAME,
         };
         var html = template(replacements);
         res.send(html);
@@ -322,7 +322,7 @@ router.post("/update", async (req, res) => {
         subscription_id: settings.subscriptionId,
         department_id: settings.department_id,
         departments: departments,
-        brand_name: BRAND_NAME
+        brand_name: BRAND_NAME,
       };
       var html = template(replacements);
       res.send(html);
@@ -382,7 +382,7 @@ router.post("/update", async (req, res) => {
             subscription_id: settings.subscriptionId,
             department_id: settings.department_id,
             departments: departments,
-            brand_name: BRAND_NAME
+            brand_name: BRAND_NAME,
           };
           var html = template(replacements);
           res.send(html);
@@ -398,7 +398,7 @@ router.post("/update", async (req, res) => {
             proxy_url: proxy_url,
             departments: departments,
             show_error_modal: true,
-            brand_name: BRAND_NAME
+            brand_name: BRAND_NAME,
           };
           var html = template(replacements);
           res.send(html);
@@ -450,7 +450,7 @@ router.post("/disconnect", async (req, res) => {
           token: token,
           proxy_url: proxy_url,
           departments: departments,
-          brand_name: BRAND_NAME
+          brand_name: BRAND_NAME,
         };
         var html = template(replacements);
         res.send(html);
@@ -502,9 +502,9 @@ router.get("/direct/tiledesk", async (req, res) => {
     .then((response) => {
       winston.verbose(
         "(wab) Message sent to WhatsApp! " +
-        response.status +
-        " " +
-        response.statusText
+          response.status +
+          " " +
+          response.statusText
       );
     })
     .catch((err) => {
@@ -517,41 +517,44 @@ router.get("/direct/tiledesk", async (req, res) => {
 
 router.post("/tiledesk/broadcast", async (req, res) => {
   winston.verbose("(wab) Message received from Tiledesk (Broadcast)");
-
   let tiledeskChannelMessage = req.body.payload;
   winston.verbose("(wab) tiledeskChannelMessage: ", tiledeskChannelMessage);
   let project_id = req.body.payload.id_project;
+  let receiver_list = req.body.receiver_list;
+  let phone_number_id = req.body.phone_number_id;
+
+  if (!Array.isArray(receiver_list)) {
+    return res.status(200).send({
+      success: true,
+      message: "Broadcast terminated",
+      messages_sent: "",
+    });
+  }
 
   let CONTENT_KEY = "whatsapp-" + project_id;
   let settings = await db.get(CONTENT_KEY);
 
   if (!settings) {
-    return res
-      .status(400)
-      .send({
-        success: false,
-        error: "WhatsApp is not installed for the project_id: " + project_id,
-      });
+    return res.status(400).send({
+      success: false,
+      error: "WhatsApp is not installed for the project_id: " + project_id,
+    });
   }
 
   if (!settings.business_account_id) {
-    return res
-      .status(400)
-      .send({
-        success: false,
-        error:
-          "Missing parameter 'WhatsApp Business Account ID'. Please update your app.",
-      });
+    return res.status(400).send({
+      success: false,
+      error:
+        "Missing parameter 'WhatsApp Business Account ID'. Please update your app.",
+    });
   }
-
-  let receiver_list = req.body.receiver_list;
-  let phone_number_id = req.body.phone_number_id;
 
   let tm = new TemplateManager({
     token: settings.wab_token,
     business_account_id: settings.business_account_id,
     GRAPH_URL: GRAPH_URL,
   });
+
   const tlr = new TiledeskWhatsappTranslator();
   const twClient = new TiledeskWhatsapp({
     token: settings.wab_token,
@@ -560,13 +563,16 @@ router.post("/tiledesk/broadcast", async (req, res) => {
     BASE_FILE_URL: BASE_FILE_URL,
   });
 
-  let response = await tm.getTemplates();
-  let templates = response.data;
-
+  let { data: templates } = await tm.getTemplates();
   let selected_template = templates.find(
     (t) => t.name === tiledeskChannelMessage.attributes.attachment.template.name
   );
-
+  if (!selected_template) {
+    return res.status(400).send({
+      success: false,
+      error: "Template whatsapp not exists",
+    });
+  }
   let params_object = await tm.generateParamsObject(selected_template);
 
   tiledeskChannelMessage.attributes.attachment.template.params = params_object;
@@ -576,75 +582,113 @@ router.post("/tiledesk/broadcast", async (req, res) => {
   let errors = [];
   let error_count = 0;
 
-  if (receiver_list) {
-    let i = 0;
-    async function execute(whatsapp_receiver) {
-      let customTiledeskJsonMessage = await tlr.sanitizeTiledeskMessage(
-        tiledeskChannelMessage,
-        whatsapp_receiver
-      );
-      winston.verbose("customTiledeskJsonMessage: ", customTiledeskJsonMessage);
+  const tdChannel = new TiledeskChannel({
+    settings: settings,
+    API_URL: API_URL,
+  });
+  const messageText = selected_template.components
+    .map((c) => c.text)
+    .join("\n");
 
-      let whatsappJsonMessage = await tlr.toWhatsapp(
-        customTiledeskJsonMessage,
-        whatsapp_receiver.phone_number
+  let i = 0;
+  async function execute(whatsapp_receiver) {
+    let customTiledeskJsonMessage = await tlr.sanitizeTiledeskMessage(
+      tiledeskChannelMessage,
+      whatsapp_receiver
+    );
+    winston.verbose("customTiledeskJsonMessage: ", customTiledeskJsonMessage);
+
+    let whatsappJsonMessage = await tlr.toWhatsapp(
+      customTiledeskJsonMessage,
+      whatsapp_receiver.phone_number
+    );
+    delete whatsappJsonMessage.template.components;
+
+    winston.verbose(
+      "(wab) message created for receiver: " + whatsapp_receiver.phone_number
+    );
+    winston.verbose("(wab) whatsappJsonMessage", whatsappJsonMessage);
+    try {
+      const response = await twClient.sendMessage(
+        phone_number_id,
+        whatsappJsonMessage
       );
+
       winston.verbose(
-        "(wab) message created for receiver: " + whatsapp_receiver.phone_number
+        "(wab) Message sent to WhatsApp! " +
+          response.status +
+          " " +
+          response.statusText
       );
-      winston.verbose("(wab) whatsappJsonMessage", whatsappJsonMessage);
 
-      await twClient
-        .sendMessage(phone_number_id, whatsappJsonMessage)
-        .then((response) => {
-          winston.verbose(
-            "(wab) Message sent to WhatsApp! " +
-            response.status +
-            " " +
-            response.statusText
-          );
-          messages_sent += 1;
-          i += 1;
-          if (i < receiver_list.length) {
-            execute(receiver_list[i]);
-          } else {
-            winston.debug("(wab) End of list");
-            return res
-              .status(200)
-              .send({
-                success: true,
-                message: "Broadcast terminated",
-                messages_sent: messages_sent,
-                errors: errors,
-              });
-          }
-        })
-        .catch((err) => {
-          winston.error(
-            "(wab) error send message: " + err.response.data.error.message
-          );
-          errors.push({
-            receiver: whatsapp_receiver.phone_number,
-            error: err.response.data.error.message,
-          });
-          i += 1;
-          if (i < receiver_list.length) {
-            execute(receiver_list[i]);
-          } else {
-            winston.debug("(wab) End of list");
-            return res
-              .status(200)
-              .send({
-                success: true,
-                message: "Broadcast terminated",
-                messages_sent: messages_sent,
-                errors: errors,
-              });
-          }
+      messages_sent += 1;
+      i += 1;
+
+      const whatsappChannelMessage = {
+        from: response.data.contacts[0].wa_id,
+        id: response.data.messages[0].id,
+        timestamp: Date.now(),
+        text: {
+          body: messageText,
+        },
+        type: "text",
+      };
+
+      let message_info = {
+        channel: "whatsapp",
+        whatsapp: {
+          phone_number_id: phone_number_id,
+          from: whatsappChannelMessage.from,
+          firstname: "",
+          lastname: " ",
+        },
+      };
+
+      const tiledeskJsonMessage = await tlr.toTiledesk(
+        whatsappChannelMessage,
+        "firstname"
+      );
+
+      const tdResponse = await tdChannel.send(
+        tiledeskJsonMessage,
+        message_info,
+        settings.department_id
+      );
+
+      if (i < receiver_list.length) {
+        execute(receiver_list[i]);
+      } else {
+        winston.debug("(wab) End of list");
+        return res.status(200).send({
+          success: true,
+          message: "Broadcast terminated",
+          messages_sent: messages_sent,
+          errors: errors,
         });
+      }
+    } catch (err) {
+      winston.error(
+        "(wab) error send message: " + err.response.data.error.message
+      );
+      errors.push({
+        receiver: whatsapp_receiver.phone_number,
+        error: err.response.data.error.message,
+      });
+      i += 1;
+      if (i < receiver_list.length) {
+        execute(receiver_list[i]);
+      } else {
+        winston.debug("(wab) End of list");
+        return res.status(200).send({
+          success: true,
+          message: "Broadcast terminated",
+          messages_sent: messages_sent,
+          errors: errors,
+        });
+      }
     }
-    execute(receiver_list[0]);
   }
+  execute(receiver_list[0]);
 });
 
 /*
@@ -724,7 +768,7 @@ router.post("/tiledesk", async (req, res) => {
   var tiledeskChannelMessage = req.body.payload;
   winston.debug("(wab) tiledeskChannelMessage: ", tiledeskChannelMessage);
   var project_id = req.body.payload.id_project;
-  
+
   // get settings from mongo
   let CONTENT_KEY = "whatsapp-" + project_id;
   let settings = await db.get(CONTENT_KEY);
@@ -776,7 +820,9 @@ router.post("/tiledesk", async (req, res) => {
   }
 
   if (!phone_number_id) {
-    return res.status(400).send({ success: false, message: "Phone number id undefined" });
+    return res
+      .status(400)
+      .send({ success: false, message: "Phone number id undefined" });
   }
 
   /*
@@ -861,7 +907,12 @@ router.post("/tiledesk", async (req, res) => {
           twClient
             .sendMessage(phone_number_id, whatsappJsonMessage)
             .then((response) => {
-              winston.verbose("(wab) Message sent to WhatsApp! " + response.status + " " + response.statusText);
+              winston.verbose(
+                "(wab) Message sent to WhatsApp! " +
+                  response.status +
+                  " " +
+                  response.statusText
+              );
               i += 1;
               if (i < commands.length) {
                 execute(commands[i]);
@@ -892,7 +943,6 @@ router.post("/tiledesk", async (req, res) => {
       }
     }
     execute(commands[0]);
-
   } else if (tiledeskChannelMessage.text || tiledeskChannelMessage.metadata) {
     let whatsappJsonMessage = await tlr.toWhatsapp(
       tiledeskChannelMessage,
@@ -911,22 +961,34 @@ router.post("/tiledesk", async (req, res) => {
       twClient
         .sendMessage(phone_number_id, whatsappJsonMessage)
         .then((response) => {
-          winston.verbose("(wab) Message sent to WhatsApp! " + response.status + " " + response.statusText);
+          winston.verbose(
+            "(wab) Message sent to WhatsApp! " +
+              response.status +
+              " " +
+              response.statusText
+          );
           return res.sendStatus(200);
         })
         .catch((err) => {
           winston.error("(wab) error send message: ", err);
-          return res.status(400).send({ success: false, error: "Template not existing" });
+          return res
+            .status(400)
+            .send({ success: false, error: "Template not existing" });
         });
     } else {
       winston.error("(wab) Whatsapp Json Message is undefined!");
-      return res.status(400).send({ success: false, error: "An error occurred during message translation" });
+      return res.status(400).send({
+        success: false,
+        error: "An error occurred during message translation",
+      });
     }
   } else {
     winston.debug("(wab) no command, no text --> skip");
-    return res.sendStatus(400).send({ success: false, error: "No command or text specified. Skip message." });
+    return res.sendStatus(400).send({
+      success: false,
+      error: "No command or text specified. Skip message.",
+    });
   }
-  
 });
 
 router.post("/tiledesk/direct", async (req, res) => {
@@ -936,7 +998,7 @@ router.post("/tiledesk/direct", async (req, res) => {
   winston.debug("(wab) tiledeskChannelMessage: ", tiledeskChannelMessage);
   var project_id = req.body.payload.id_project;
   var phone_number_id = req.body.payload.recipient_id;
-  
+
   // get settings from mongo
   let CONTENT_KEY = "whatsapp-" + project_id;
   let settings = await db.get(CONTENT_KEY);
@@ -950,17 +1012,16 @@ router.post("/tiledesk/direct", async (req, res) => {
     return res.sendStatus(200);
   }
 
-
   if (!phone_number_id) {
-    return res.status(400).send({ success: false, message: "Phone number id undefined" });
+    return res
+      .status(400)
+      .send({ success: false, message: "Phone number id undefined" });
   }
-
 
   winston.debug("(wab) text: " + text);
   winston.debug("(wab) tiledesk sender_id: " + sender_id);
   winston.debug("(wab) whatsapp_receiver: " + whatsapp_receiver);
   winston.debug("(wab) phone_number_id: " + phone_number_id);
-
 
   const tlr = new TiledeskWhatsappTranslator();
 
@@ -981,16 +1042,26 @@ router.post("/tiledesk/direct", async (req, res) => {
     twClient
       .sendMessage(phone_number_id, whatsappJsonMessage)
       .then((response) => {
-        winston.verbose("(wab) Message sent to WhatsApp! " + response.status + " " + response.statusText);
+        winston.verbose(
+          "(wab) Message sent to WhatsApp! " +
+            response.status +
+            " " +
+            response.statusText
+        );
         return res.sendStatus(200);
       })
       .catch((err) => {
         winston.error("(wab) error send message: ", err);
-        return res.status(400).send({ success: false, error: "Template not existing" });
+        return res
+          .status(400)
+          .send({ success: false, error: "Template not existing" });
       });
   } else {
     winston.error("(wab) Whatsapp Json Message is undefined!");
-    return res.status(400).send({ success: false, error: "An error occurred during message translation" });
+    return res.status(400).send({
+      success: false,
+      error: "An error occurred during message translation",
+    });
   }
 });
 
@@ -1000,15 +1071,14 @@ router.post("/webhook/:project_id", async (req, res) => {
   // Parse the request body from the POST
   let project_id = req.params.project_id;
   winston.verbose("(wab) Message received from WhatsApp");
-  winston.info(req.body);
+
   // Check the Incoming webhook message
   // info on WhatsApp text message payload: https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples#text-messages
   if (req.body.object) {
-    
     let CONTENT_KEY = "whatsapp-" + project_id;
     let settings = await db.get(CONTENT_KEY);
     winston.debug("(wab) settings: ", settings);
-    
+
     const tdClient = new TiledeskClient({
       projectId: project_id,
       token: settings.token,
@@ -1031,9 +1101,11 @@ router.post("/webhook/:project_id", async (req, res) => {
         winston.verbose("(wab) Skip system message");
         return res.sendStatus(200);
       }
-      
+
       if (req.body.entry[0].id !== settings.business_account_id) {
-        winston.verbose("(wab) Skip message with waba that not belong to Tiledesk project id");
+        winston.verbose(
+          "(wab) Skip message with waba that not belong to Tiledesk project id"
+        );
         return res.sendStatus(200);
       }
 
@@ -1097,7 +1169,7 @@ router.post("/webhook/:project_id", async (req, res) => {
             lastname: " ",
           },
         };
-        
+
         let tiledeskJsonMessage;
 
         /*
@@ -1206,8 +1278,8 @@ router.post("/webhook/:project_id", async (req, res) => {
             if (!filename) {
               winston.debug(
                 "(wab) Unable to download media with id " +
-                media.id +
-                ". Message not sent."
+                  media.id +
+                  ". Message not sent."
               );
               return res
                 .status(500)
@@ -1232,8 +1304,8 @@ router.post("/webhook/:project_id", async (req, res) => {
             if (!filename) {
               winston.debug(
                 "(wab) Unable to download media with id " +
-                media.id +
-                ". Message not sent."
+                  media.id +
+                  ". Message not sent."
               );
               return res
                 .status(500)
@@ -1258,8 +1330,8 @@ router.post("/webhook/:project_id", async (req, res) => {
             if (!filename) {
               winston.debug(
                 "(wab) Unable to download media with id " +
-                media.id +
-                ". Message not sent."
+                  media.id +
+                  ". Message not sent."
               );
               return res
                 .status(500)
@@ -1284,8 +1356,8 @@ router.post("/webhook/:project_id", async (req, res) => {
             if (!filename) {
               winston.debug(
                 "(wab) Unable to download media with id " +
-                media.id +
-                ". Message not sent."
+                  media.id +
+                  ". Message not sent."
               );
               return res
                 .status(500)
@@ -1433,11 +1505,9 @@ router.post("/newtest", async (req, res) => {
   let key = "bottest:" + short_uid;
 
   if (!redis_client) {
-    return res
-      .status(500)
-      .send({
-        message: "Test it out on Whatsapp not available. Redis not ready.",
-      });
+    return res.status(500).send({
+      message: "Test it out on Whatsapp not available. Redis not ready.",
+    });
   }
 
   await redis_client.set(key, JSON.stringify(info), "EX", 604800);
@@ -1544,12 +1614,10 @@ router.get("/templates/:project_id", async (req, res) => {
     });
   } else {
     winston.verbose("No settings found.");
-    return res
-      .status(404)
-      .send({
-        success: false,
-        error: "whatsapp not installed for the project id " + project_id,
-      });
+    return res.status(404).send({
+      success: false,
+      error: "whatsapp not installed for the project id " + project_id,
+    });
   }
 });
 
@@ -1672,17 +1740,19 @@ async function startApp(settings, callback) {
   }
 
   if (!settings.JOB_TOPIC_EXCHANGE) {
-    winston.info("(wab) JOB_TOPIC_EXCHANGE should be present. Using default value");
+    winston.info(
+      "(wab) JOB_TOPIC_EXCHANGE should be present. Using default value"
+    );
     JOB_TOPIC_EXCHANGE = "tiledesk-whatsapp";
   } else {
     JOB_TOPIC_EXCHANGE = settings.JOB_TOPIC_EXCHANGE;
     winston.info("(wab) JOB_TOPIC_EXCHANGE is present");
   }
-  
+
   if (settings.BRAND_NAME) {
-    BRAND_NAME = settings.BRAND_NAME
+    BRAND_NAME = settings.BRAND_NAME;
   }
-  
+
   // // For test only
   // if (settings.LOG_MONGODB_URL) {
   //   /**
@@ -1720,11 +1790,11 @@ async function startApp(settings, callback) {
       if (callback) {
         callback(null);
       }
-    })
+    });
   } else {
     db.connect(settings.MONGODB_URL, () => {
       winston.info("(wab) KVBaseMongo successfully connected.");
-  
+
       if (callback) {
         callback(null);
       }

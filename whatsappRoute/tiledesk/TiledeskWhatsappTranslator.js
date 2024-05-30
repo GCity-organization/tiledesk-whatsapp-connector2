@@ -89,12 +89,21 @@ const path = require('path');
       }
 
       else if (tiledeskChannelMessage.metadata.type.startsWith('application')) {
-        var doc = tiledeskChannelMessage.metadata.src;
+        //var doc = tiledeskChannelMessage.metadata.src;
+        var doc = tiledeskChannelMessage.metadata.downloadURL;
         whatsapp_message.type = 'document'
         whatsapp_message.document = {
           link: doc,
-          caption: tiledeskChannelMessage.metadata.name || tiledeskChannelMessage.text
+          filename: tiledeskChannelMessage.metadata.name,
         }
+        
+        let index = tiledeskChannelMessage.text.indexOf(tiledeskChannelMessage.metadata.src);
+        if (index != -1) {
+          let length = tiledeskChannelMessage.metadata.src.length;
+          let caption = tiledeskChannelMessage.text.substring(index + length + 2);
+          whatsapp_message.document.caption = caption;
+        }
+        
       }
 
       else {
