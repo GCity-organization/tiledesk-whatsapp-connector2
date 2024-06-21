@@ -547,13 +547,13 @@ const path = require('path');
     // media message - video
     else if (whatsappChannelMessage.type == 'video') {
 
-      let text = "Video attached"
+      let text = "[Download video](" + media_url + ")"
       if (whatsappChannelMessage.video.caption) {
         text = whatsappChannelMessage.video.caption;
       }
 
       var tiledeskMessage = {
-        text: "[Download video](" + media_url + ")",
+        text: text,
         senderFullname: from,
         channel: { name: TiledeskWhatsappTranslator.CHANNEL_NAME },
         type: "file",
@@ -591,13 +591,13 @@ const path = require('path');
     // media message - audio
     else if (whatsappChannelMessage.type == 'audio') {
 
-      let text = "Audio attached"
+      let text = "[Download audio](" + media_url + ")"
       /*if (whatsappChannelMessage.document.caption) {
         text = whatsappChannelMessage.document.caption
       }*/
 
       var tiledeskMessage = {
-        text: "",
+        text: text,
         senderFullname: from,
         channel: { name: TiledeskWhatsappTranslator.CHANNEL_NAME },
         type: "file",
